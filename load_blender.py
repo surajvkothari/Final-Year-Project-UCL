@@ -1,7 +1,7 @@
 import os
 import torch
 import numpy as np
-import imageio 
+import imageio
 import json
 import torch.nn.functional as F
 import cv2
@@ -52,7 +52,7 @@ def load_blender_data(basedir, half_res=False, testskip=1):
             skip = 1
         else:
             skip = testskip
-            
+
         for frame in meta['frames'][::skip]:
             fname = os.path.join(basedir, frame['file_path'] + '.png')
             imgs.append(imageio.imread(fname))
@@ -62,18 +62,18 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         counts.append(counts[-1] + imgs.shape[0])
         all_imgs.append(imgs)
         all_poses.append(poses)
-    
+
     i_split = [np.arange(counts[i], counts[i+1]) for i in range(3)]
-    
+
     imgs = np.concatenate(all_imgs, 0)
     poses = np.concatenate(all_poses, 0)
-    
+
     H, W = imgs[0].shape[:2]
     camera_angle_x = float(meta['camera_angle_x'])
     focal = .5 * W / np.tan(.5 * camera_angle_x)
-    
+
     render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
-    
+
     if half_res:
         H = H//2
         W = W//2
@@ -85,7 +85,26 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         imgs = imgs_half_res
         # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
 
-        
+
     return imgs, poses, render_poses, [H, W, focal], i_split
 
 
+def load_npz_data(data_dir):
+    """ Loads data from a numpy .npz dataset """
+    dataset = np.load(data_dir)
+    images, poses, FOCAL = dataset["images"], dataset["poses"], dataset["focal"]
+
+    HEIGHT, WIDTH = images.shape[1:3]
+
+    train_index = int(images.shape[0]*0.8)  # Train data is 80% of data
+    val_index = train_index + int(images.shape[0]*0.1)  # Validation data is 10%
+    test_index = images.shape[0]  # Test data index is the final index of data
+
+    counts = [0, train_index, val_index, test_index]
+    # Gets indexes for train, validation, test split
+    i_split = [np.arange(counts[i], counts[i+1]) for i in range(3)]
+
+    # Poses for rendering video. Poses taken from a 360* rotation around a sphere
+    render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
+
+    return images, poses, render_poses, [HEIGHT, WIDTH, FOCAL], i_split
