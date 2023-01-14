@@ -6,30 +6,40 @@ import json
 import torch.nn.functional as F
 import cv2
 
-
+# Translation on z-axis
 trans_t = lambda t : torch.Tensor([
     [1,0,0,0],
     [0,1,0,0],
     [0,0,1,t],
     [0,0,0,1]]).float()
 
-rot_phi = lambda phi : torch.Tensor([
+# Rotation on x-axis
+rot_x = lambda x : torch.Tensor([
     [1,0,0,0],
-    [0,np.cos(phi),-np.sin(phi),0],
-    [0,np.sin(phi), np.cos(phi),0],
+    [0,np.cos(x),-np.sin(x),0],
+    [0,np.sin(x), np.cos(x),0],
     [0,0,0,1]]).float()
 
-rot_theta = lambda th : torch.Tensor([
-    [np.cos(th),0,-np.sin(th),0],
+# Rotation on y-axis
+rot_y = lambda y : torch.Tensor([
+    [np.cos(y),0,-np.sin(y),0],
     [0,1,0,0],
-    [np.sin(th),0, np.cos(th),0],
+    [np.sin(y),0, np.cos(y),0],
+    [0,0,0,1]]).float()
+
+# Rotation on z-axis
+rot_z = lambda z : torch.Tensor([
+    [np.cos(z),-np.sin(z),0, 0],
+    [np.sin(z),np.cos(z),0,  0],
+    [0,0,1, 0],
     [0,0,0,1]]).float()
 
 
-def pose_spherical(theta, phi, radius):
+def pose_spherical(x, y, z, radius):
     c2w = trans_t(radius)
-    c2w = rot_phi(phi/180.*np.pi) @ c2w
-    c2w = rot_theta(theta/180.*np.pi) @ c2w
+    c2w = rot_x(x/180.*np.pi) @ c2w
+    c2w = rot_y(y/180.*np.pi) @ c2w
+    c2w = rot_z(z/180.*np.pi) @ c2w
     c2w = torch.Tensor(np.array([[-1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]])) @ c2w
     return c2w
 
@@ -72,11 +82,8 @@ def load_blender_data(basedir, half_res=False, testskip=1):
     camera_angle_x = float(meta['camera_angle_x'])
     focal = .5 * W / np.tan(.5 * camera_angle_x)
 
-    # Poses for 360* rotation around z-axis
-    #render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
-
-    # Poses for 360* rotation around custom axis
-    render_poses = torch.stack([pose_spherical(-30, angle, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
+    # Render poses for lego tractor (360-degree rotation around z-axis)
+    render_poses = torch.stack([pose_spherical(x=angle, y=-30.0, z=0, radius=4.0) for angle in np.linspace(0,360,40+1)[:-1]], 0)
 
     if half_res:
         H = H//2
@@ -87,8 +94,6 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         for i, img in enumerate(imgs):
             imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
         imgs = imgs_half_res
-        # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
-
 
     return imgs, poses, render_poses, [H, W, focal], i_split
 
@@ -98,17 +103,20 @@ def load_npz_data(data_dir):
     dataset = np.load(data_dir)
     images, poses, FOCAL = dataset["images"], dataset["poses"], dataset["focal"]
 
+    NUM_IMAGES = images.shape[0]
     HEIGHT, WIDTH = images.shape[1:3]
 
-    train_index = int(images.shape[0]*0.8)  # Train data is 80% of data
-    val_index = train_index + int(images.shape[0]*0.1)  # Validation data is 10%
-    test_index = images.shape[0]  # Test data index is the final index of data
+    train_index = int(NUM_IMAGES*0.8)  # Train data is 80% of data
+    val_index = train_index + int(NUM_IMAGES*0.1)  # Validation data is 10%
+    test_index = NUM_IMAGES  # Test data index is the final index of data
 
     counts = [0, train_index, val_index, test_index]
     # Gets indexes for train, validation, test split
     i_split = [np.arange(counts[i], counts[i+1]) for i in range(3)]
 
-    # Poses for rendering video. Poses taken from a 360* rotation around a sphere
-    render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
+    # Render poses based on sample from original poses
+    NUM_RENDER_POSES = 50
+    step_size = int(NUM_IMAGES / NUM_RENDER_POSES)  # Round up to next integer
+    render_poses = poses[::step_size,...]  # Move step_size through original poses
 
     return images, poses, render_poses, [HEIGHT, WIDTH, FOCAL], i_split
