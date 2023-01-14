@@ -1,14 +1,17 @@
-expname = tractor
+expname = OIVIO_start_10_downsampled
 basedir = ./logs
-datadir = ./data/tractor_data.npz
+datadir = ./data/OIVIO_start_10_downsampled.npz
+ft_path = ./logs/OIVIO_start_10_downsampled/020000.tar
 dataset_type = npz
 
 no_batching = True
 i_video = 1000
+i_weights = 1000
 
 use_viewdirs = True
 lrate_decay = 500
 
+N_iters = 20001
 N_samples = 64
 N_importance = 128
 N_rand = 1024
