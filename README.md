@@ -1,2 +1,1 @@
-# NeRF
-Final Year Project on NeRFs and the OIVIO dataset
+# Final Year Project
