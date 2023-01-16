@@ -150,13 +150,11 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
-        print(i, time.time() - t)
+        #print(i, time.time() - t)
         t = time.time()
         rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
-        if i==0:
-            print(rgb.shape, disp.shape)
 
         """
         if gt_imgs is not None and render_factor==0:
@@ -469,6 +467,8 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
+    parser.add_argument("--use_static_cam", action='store_true',
+                        help='Fixes camera but changes viewing direction')
     parser.add_argument("--i_embed", type=int, default=0,
                         help='set 0 for default positional encoding, -1 for none')
     parser.add_argument("--multires", type=int, default=10,
@@ -492,8 +492,8 @@ def config_parser():
                         default=.5, help='fraction of img taken for central crops')
 
     # dataset options
-    parser.add_argument("--dataset_type", type=str, default='llff',
-                        help='options: llff / blender / deepvoxels')
+    parser.add_argument("--dataset_type", type=str, default='npz',
+                        help='options: llff / blender / npz / deepvoxels')
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
 
@@ -520,7 +520,7 @@ def config_parser():
                         help='will take every 1/N images as LLFF test set, paper uses 8')
 
     # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=100,
+    parser.add_argument("--i_print",   type=int, default=500,
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500,
                         help='frequency of tensorboard image logging')
@@ -663,7 +663,7 @@ def train():
 
     # Short circuit if only rendering out from trained model
     if args.render_only:
-        print('RENDER ONLY')
+        print('RENDERING')
         with torch.no_grad():
             if args.render_test:
                 # render_test switches to test poses
@@ -674,7 +674,6 @@ def train():
 
             testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
             os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', render_poses.shape)
 
             rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
@@ -712,8 +711,8 @@ def train():
     N_iters = args.N_iters
     print('Begin')
     print('TRAIN views are', i_train)
-    print('TEST views are', i_test)
     print('VAL views are', i_val)
+    print('TEST views are', i_test)
 
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
@@ -811,33 +810,92 @@ def train():
             print('Saved checkpoints at', path)
 
         if i%args.i_video==0 and i > 0:
+            print("\nRENDERING")
             # Turn on testing mode
             with torch.no_grad():
                 rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
             print('Done, saving', rgbs.shape, disps.shape)
-            moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
+            moviebase = os.path.join(basedir, expname, '{}_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'depth.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
-            # if args.use_viewdirs:
-            #     render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
-            #     with torch.no_grad():
-            #         rgbs_still, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test)
-            #     render_kwargs_test['c2w_staticcam'] = None
-            #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
+            if args.use_static_cam:
+                render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
+                with torch.no_grad():
+                    rgbs_static, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test)
+                render_kwargs_test['c2w_staticcam'] = None
+                imageio.mimwrite(moviebase + 'rgb_static.mp4', to8b(rgbs_static), fps=30, quality=8)
 
         if i%args.i_testset==0 and i > 0:
+            print("\nTESTING")
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', poses[i_test].shape)
+            print("Test poses shape:", poses[i_test].shape)
+            i_test_sorted = np.sort(i_test)  # Sort the test poses in order
             with torch.no_grad():
-                render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
-            print('Saved test set')
+                test_rgbs, _ = render_path(torch.Tensor(poses[i_test_sorted]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test_sorted], savedir=testsavedir)
+            print("Saved test set")
+            imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(test_rgbs), fps=30, quality=8)
+            print("Created test set video")
 
 
 
         if i%args.i_print==0:
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+            tqdm.write(f"\nIteration: {i}")
+            tqdm.write(f"[TRAIN] Loss: {loss.item():.5f} | PSNR: {psnr.item():.5f}")
+	    
+            # Validation forward pass
+            val_i = np.random.choice(i_val)  # Choose from validation set
+            val_target = images[val_i]
+            val_target = torch.Tensor(val_target).to(device)
+            val_pose = poses[val_i, :3,:4]
+
+            if N_rand is not None:
+                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(val_pose))  # (H, W, 3), (H, W, 3)
+
+                if i < args.precrop_iters:
+                    dH = int(H//2 * args.precrop_frac)
+                    dW = int(W//2 * args.precrop_frac)
+                    coords = torch.stack(
+                        torch.meshgrid(
+                            torch.linspace(H//2 - dH, H//2 + dH - 1, 2*dH),
+                            torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
+                        ), -1)
+                    if i == start:
+                        print(f"[Config] Center cropping of size {2*dH} x {2*dW} is enabled until iter {args.precrop_iters}")
+                else:
+                    coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+
+                coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+                select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+                select_coords = coords[select_inds].long()  # (N_rand, 2)
+                rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                batch_rays = torch.stack([rays_o, rays_d], 0)
+                val_target_s = val_target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+
+            # Forward pass
+            val_rgb, _, _, val_extras = render(H, W, K, chunk=args.chunk, rays=batch_rays, 
+                                            verbose=i < 10, retraw=True,
+                                            **render_kwargs_train)
+
+
+            # val_idx = np.random.choice(i_val)
+            # val_target = images[val_idx]
+            # val_pose = poses[val_idx, :3,:4]
+            
+            # with torch.no_grad():
+            #     val_rgb, _, _, _ = render(H, W, focal, chunk=args.chunk, c2w=val_pose, **render_kwargs_test)
+
+            val_loss = img2mse(val_rgb, val_target_s)
+            val_psnr = mse2psnr(val_loss)
+            
+            if 'rgb0' in val_extras:
+                val_loss0 = img2mse(val_extras['rgb0'], val_target_s)
+                val_loss += val_loss0
+
+            tqdm.write(f"[VALIDATION] Loss: {val_loss.item():.5f} | PSNR: {val_psnr.item():.5f}")
+
         """
             print(expname, i, psnr.numpy(), loss.numpy(), global_step.numpy())
             print('iter time {:.05f}'.format(dt))
