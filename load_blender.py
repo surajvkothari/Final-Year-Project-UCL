@@ -105,18 +105,20 @@ def load_npz_data(data_dir):
 
     NUM_IMAGES = images.shape[0]
     HEIGHT, WIDTH = images.shape[1:3]
+    
+    num_train = int(NUM_IMAGES*0.8)
+    num_val = num_train + int(NUM_IMAGES*0.1)
+    num_test = num_val + int(NUM_IMAGES*0.1)
 
-    train_index = int(NUM_IMAGES*0.8)  # Train data is 80% of data
-    val_index = train_index + int(NUM_IMAGES*0.1)  # Validation data is 10%
-    test_index = NUM_IMAGES  # Test data index is the final index of data
+    indexs = np.arange(NUM_IMAGES)
+    np.random.shuffle(indexs)  # Random shuffle indexs in-place
 
-    counts = [0, train_index, val_index, test_index]
-    # Gets indexes for train, validation, test split
-    i_split = [np.arange(counts[i], counts[i+1]) for i in range(3)]
+    # Select train, val, test from shuffled indexs
+    i_split = [indexs[:num_train], indexs[num_train:num_val], indexs[num_val:num_test]]
 
-    # Render poses based on sample from original poses
+    # Render poses are a sample of original poses
     NUM_RENDER_POSES = 50
-    step_size = int(NUM_IMAGES / NUM_RENDER_POSES)  # Round up to next integer
-    render_poses = poses[::step_size,...]  # Move step_size through original poses
+    STEP = int(NUM_IMAGES / NUM_RENDER_POSES)  # Round up to next integer
+    render_poses = poses[::STEP,...]  # Select every <STEP> poses
 
     return images, poses, render_poses, [HEIGHT, WIDTH, FOCAL], i_split
