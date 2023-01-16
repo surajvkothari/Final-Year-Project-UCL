@@ -1,20 +1,21 @@
 expname = OIVIO_start_10_downsampled
 basedir = ./logs
 datadir = ./data/OIVIO_start_10_downsampled.npz
-ft_path = ./logs/OIVIO_start_10_downsampled/020000.tar
+ft_path = ./logs/OIVIO_start_10_downsampled/050000.tar
 dataset_type = npz
 
 no_batching = True
-i_video = 1000
-i_weights = 1000
+i_weights = 5000
+i_video = 5000
+i_test = 5000
 
 use_viewdirs = True
-lrate_decay = 500
 
-N_iters = 20001
+N_iters = 100001
 N_samples = 64
 N_importance = 128
 N_rand = 1024
+lrate = 0.00032
 
 precrop_iters = 500
 precrop_frac = 0.5
