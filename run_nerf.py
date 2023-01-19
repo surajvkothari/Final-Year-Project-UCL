@@ -473,7 +473,7 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
         rgb, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
     render_out = rgb.cpu().detach().numpy()
-
+    render_out = cv2.cvtColor(render_out, cv2.COLOR_RGB2BGR)
     render_out = cv2.resize(render_out, (W*3, H*3))
     cv2.imshow("Explore", render_out)
     key = cv2.waitKey(0)
@@ -781,7 +781,7 @@ def train():
 
         explore_pose = poses[0]  # Initialise at starting pose
         initial_pose = np.copy(explore_pose)
-        
+
         explore(explore_pose, hwf, K, args.chunk, render_kwargs_test, initial_pose)
 
         return
