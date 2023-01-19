@@ -1,4 +1,5 @@
 import os, sys
+import cv2
 import numpy as np
 import imageio
 import json
@@ -19,8 +20,8 @@ from load_blender import load_blender_data
 from load_blender import load_npz_data
 from load_LINEMOD import load_LINEMOD_data
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 np.random.seed(0)
 DEBUG = False
 
@@ -417,6 +418,95 @@ def render_rays(ray_batch,
     return ret
 
 
+def update_pose(key, pose):
+    STEP_SIZE = 0.3
+
+    if key == "up":
+        origin_vector = pose[:3, -1]
+
+        # Move in the direction of the origin vector (up)
+        pose[:3, -1] -= STEP_SIZE * origin_vector
+
+    elif key == "down":
+        origin_vector = pose[:3, -1]
+
+        # Move in the opposite direction of the origin vector (down)
+        pose[:3, -1] += STEP_SIZE * origin_vector
+
+    elif key == "left":
+        original_vector = pose[:3, -1]
+
+        # Generate the orthogonal vector
+        orthogonal_vector = np.cross(original_vector, [0,1,0])
+
+        # Scale orthogonal vector to the same length as original_vector
+        orthogonal_vector = orthogonal_vector * (np.linalg.norm(original_vector) / np.linalg.norm(orthogonal_vector))
+
+        # Move in the direction of the orthogonal vector (left)
+        pose[:3, -1] -= STEP_SIZE * orthogonal_vector
+
+
+    elif key == "right":
+        original_vector = pose[:3, -1]
+
+        # Generate the orthogonal vector
+        orthogonal_vector = np.cross(original_vector, [0,1,0])
+
+        # Scale orthogonal vector to the same length as original_vector
+        orthogonal_vector = orthogonal_vector * (np.linalg.norm(original_vector) / np.linalg.norm(orthogonal_vector))
+
+        # Move in the opposite direction of the orthogonal vector (right)
+        pose[:3, -1] += STEP_SIZE * orthogonal_vector
+
+    return pose
+
+
+def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
+    """ Explores through the NeRF model """
+
+    H, W, focal = hwf
+
+    # Rendering
+    with torch.no_grad():
+        explore_pose_tensor = torch.Tensor(explore_pose).to(device)
+
+        rgb, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
+
+    render_out = rgb.cpu().detach().numpy()
+
+    render_out = cv2.resize(render_out, (W*3, H*3))
+    cv2.imshow("Explore", render_out)
+    key = cv2.waitKey(0)
+
+    # Up/W
+    #(keyboard.Key.up, keyboard.KeyCode.from_char('w'))
+    if key == ord('w'):
+        explore_pose = update_pose(key="up", pose=explore_pose)
+
+    # Down/S
+    elif key == ord('s'):
+        explore_pose = update_pose(key="down", pose=explore_pose)
+
+    # Left/A
+    elif key == ord('a'):
+        explore_pose = update_pose(key="left", pose=explore_pose)
+
+    # Right/D
+    elif key == ord('d'):
+        explore_pose = update_pose(key="right", pose=explore_pose)
+
+    # Reset view
+    elif key == ord('r'):
+        print("RESET VIEW")
+        explore_pose = np.copy(initial_pose)
+
+    # If <ESC> (27) is pressed, stop program
+    elif key == 27:
+        return
+
+    explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose=initial_pose)
+
+
 def config_parser():
 
     import configargparse
@@ -484,6 +574,8 @@ def config_parser():
                         help='render the test set instead of render_poses path')
     parser.add_argument("--render_factor", type=int, default=0,
                         help='downsampling factor to speed up rendering, set 4 or 8 for fast preview')
+    parser.add_argument("--explore", action='store_true',
+                        help='Move through the NeRF model')
 
     # training options
     parser.add_argument("--precrop_iters", type=int, default=0,
@@ -664,6 +756,7 @@ def train():
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDERING')
+
         with torch.no_grad():
             if args.render_test:
                 # render_test switches to test poses
@@ -680,6 +773,19 @@ def train():
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
             return
+
+
+    if args.explore:
+        """ Move through the NeRF model """
+        print('EXPLORING')
+
+        explore_pose = poses[0]  # Initialise at starting pose
+        initial_pose = np.copy(explore_pose)
+        
+        explore(explore_pose, hwf, K, args.chunk, render_kwargs_test, initial_pose)
+
+        return
+
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
@@ -843,7 +949,7 @@ def train():
         if i%args.i_print==0:
             tqdm.write(f"\nIteration: {i}")
             tqdm.write(f"[TRAIN] Loss: {loss.item():.5f} | PSNR: {psnr.item():.5f}")
-	    
+
             # Validation forward pass
             val_i = np.random.choice(i_val)  # Choose from validation set
             val_target = images[val_i]
@@ -875,7 +981,7 @@ def train():
                 val_target_s = val_target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
             # Forward pass
-            val_rgb, _, _, val_extras = render(H, W, K, chunk=args.chunk, rays=batch_rays, 
+            val_rgb, _, _, val_extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                             verbose=i < 10, retraw=True,
                                             **render_kwargs_train)
 
@@ -883,13 +989,13 @@ def train():
             # val_idx = np.random.choice(i_val)
             # val_target = images[val_idx]
             # val_pose = poses[val_idx, :3,:4]
-            
+
             # with torch.no_grad():
             #     val_rgb, _, _, _ = render(H, W, focal, chunk=args.chunk, c2w=val_pose, **render_kwargs_test)
 
             val_loss = img2mse(val_rgb, val_target_s)
             val_psnr = mse2psnr(val_loss)
-            
+
             if 'rgb0' in val_extras:
                 val_loss0 = img2mse(val_extras['rgb0'], val_target_s)
                 val_loss += val_loss0
