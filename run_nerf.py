@@ -1,5 +1,6 @@
 import os, sys
 import cv2
+from scipy.spatial.transform import Rotation
 import numpy as np
 import imageio
 import json
@@ -419,44 +420,44 @@ def render_rays(ray_batch,
 
 
 def update_pose(key, pose):
-    STEP_SIZE = 0.3
+    STEP_SIZE = 0.2
+    ROTATION_ANGLE = 10
+
+    rotation_matrix = pose[:3, :3]
+    rotation_vector = Rotation.from_matrix(rotation_matrix).as_rotvec()
 
     if key == "up":
-        origin_vector = pose[:3, -1]
+        # Apply 90-degree rotation to rotation vector to face forwards
+        rotation_operation = Rotation.from_euler('y', 90, degrees=True)
+        rotation_vector = rotation_operation.apply(rotation_vector)
 
-        # Move in the direction of the origin vector (up)
-        pose[:3, -1] -= STEP_SIZE * origin_vector
+        # Move in the direction of the rotation vector
+        pose[:3, -1] += STEP_SIZE * rotation_vector
 
     elif key == "down":
-        origin_vector = pose[:3, -1]
+        # Apply 90-degree rotation to rotation vector to face forwards
+        rotation_operation = Rotation.from_euler('y', 90, degrees=True)
+        rotation_vector = rotation_operation.apply(rotation_vector)
 
-        # Move in the opposite direction of the origin vector (down)
-        pose[:3, -1] += STEP_SIZE * origin_vector
+        # Move in the direction of the rotation vector
+        pose[:3, -1] -= STEP_SIZE * rotation_vector
 
     elif key == "left":
-        original_vector = pose[:3, -1]
-
-        # Generate the orthogonal vector
-        orthogonal_vector = np.cross(original_vector, [0,1,0])
-
-        # Scale orthogonal vector to the same length as original_vector
-        orthogonal_vector = orthogonal_vector * (np.linalg.norm(original_vector) / np.linalg.norm(orthogonal_vector))
-
-        # Move in the direction of the orthogonal vector (left)
-        pose[:3, -1] -= STEP_SIZE * orthogonal_vector
-
+        # Get rotation matrix for rotation around an axis by given angle
+        rotation_operation = Rotation.from_euler('y', ROTATION_ANGLE, degrees=True).as_matrix()
+        # Apply operation
+        new_rotation_matrix = rotation_matrix @ rotation_operation
+        
+        pose[:3, :3] = new_rotation_matrix
 
     elif key == "right":
-        original_vector = pose[:3, -1]
 
-        # Generate the orthogonal vector
-        orthogonal_vector = np.cross(original_vector, [0,1,0])
-
-        # Scale orthogonal vector to the same length as original_vector
-        orthogonal_vector = orthogonal_vector * (np.linalg.norm(original_vector) / np.linalg.norm(orthogonal_vector))
-
-        # Move in the opposite direction of the orthogonal vector (right)
-        pose[:3, -1] += STEP_SIZE * orthogonal_vector
+        # Get rotation matrix for rotation around an axis by given angle
+        rotation_operation = Rotation.from_euler('y', -ROTATION_ANGLE, degrees=True).as_matrix()
+        # Apply operation
+        new_rotation_matrix = rotation_matrix @ rotation_operation
+        
+        pose[:3, :3] = new_rotation_matrix
 
     return pose
 
@@ -466,16 +467,19 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
     H, W, focal = hwf
 
+    SCALE_WINDOW = 3
+
     # Rendering
     with torch.no_grad():
         explore_pose_tensor = torch.Tensor(explore_pose).to(device)
 
         rgb, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
-    render_out = rgb.cpu().detach().numpy()
-    render_out = cv2.cvtColor(render_out, cv2.COLOR_RGB2BGR)
-    render_out = cv2.resize(render_out, (W*3, H*3))
-    cv2.imshow("Explore", render_out)
+        render_out = rgb.cpu().detach().numpy()
+        render_out = cv2.cvtColor(render_out, cv2.COLOR_RGB2BGR)
+        render_out = cv2.resize(render_out, (W*SCALE_WINDOW, H*SCALE_WINDOW))
+        cv2.imshow("Explore", render_out)
+    
     key = cv2.waitKey(0)
 
     # Up/W
@@ -497,7 +501,6 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
     # Reset view
     elif key == ord('r'):
-        print("RESET VIEW")
         explore_pose = np.copy(initial_pose)
 
     # If <ESC> (27) is pressed, stop program
