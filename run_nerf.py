@@ -93,6 +93,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
       rgb_map: [batch_size, 3]. Predicted RGB values for rays.
       disp_map: [batch_size]. Disparity map. Inverse of depth.
       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
+      depth_map: [batch_size]. Depth map
       extras: dict with everything returned by render_rays().
     """
     if c2w is not None:
@@ -131,7 +132,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
-    k_extract = ['rgb_map', 'disp_map', 'acc_map']
+    k_extract = ['rgb_map', 'disp_map', 'acc_map', "depth_map"]
     ret_list = [all_ret[k] for k in k_extract]
     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
     return ret_list + [ret_dict]
@@ -149,14 +150,16 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = []
     disps = []
+    depths = []
 
     t = time.time()
     for i, c2w in enumerate(tqdm(render_poses)):
         #print(i, time.time() - t)
         t = time.time()
-        rgb, disp, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, disp, acc, depth, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         disps.append(disp.cpu().numpy())
+        depths.append(depth.cpu().numpy())
 
         """
         if gt_imgs is not None and render_factor==0:
@@ -172,8 +175,9 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     rgbs = np.stack(rgbs, 0)
     disps = np.stack(disps, 0)
+    depths = np.stack(depths, 0)
 
-    return rgbs, disps
+    return rgbs, disps, depths
 
 
 def create_nerf(args):
@@ -342,10 +346,12 @@ def render_rays(ray_batch,
       rgb_map: [num_rays, 3]. Estimated RGB color of a ray. Comes from fine model.
       disp_map: [num_rays]. Disparity map. 1 / depth.
       acc_map: [num_rays]. Accumulated opacity along each ray. Comes from fine model.
+      depth_map: [num_rays]. Depth map
       raw: [num_rays, num_samples, 4]. Raw predictions from model.
       rgb0: See rgb_map. Output for coarse model.
       disp0: See disp_map. Output for coarse model.
       acc0: See acc_map. Output for coarse model.
+      depth0: See depth_map. Output for coarse model.
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
     """
@@ -388,7 +394,7 @@ def render_rays(ray_batch,
 
     if N_importance > 0:
 
-        rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
+        rgb_map_0, disp_map_0, acc_map_0, depth_map_0 = rgb_map, disp_map, acc_map, depth_map
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
         z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
@@ -403,13 +409,14 @@ def render_rays(ray_batch,
 
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
-    ret = {'rgb_map' : rgb_map, 'disp_map' : disp_map, 'acc_map' : acc_map}
+    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map}
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
+        ret['depth0'] = depth_map_0
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
@@ -473,7 +480,7 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
     with torch.no_grad():
         explore_pose_tensor = torch.Tensor(explore_pose).to(device)
 
-        rgb, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
+        rgb, _, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
         render_out = rgb.cpu().detach().numpy()
         render_out = cv2.cvtColor(render_out, cv2.COLOR_RGB2BGR)
@@ -771,7 +778,7 @@ def train():
             testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start+1))
             os.makedirs(testsavedir, exist_ok=True)
 
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+            rgbs, _, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
             print('Done rendering', testsavedir)
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
@@ -796,7 +803,7 @@ def train():
         render_kwargs_test["c2w_staticcam"] = render_poses[args.fixed_pose_index][:3,:4]  # Fixed camera pose (index given by argument)
         
         with torch.no_grad():
-            rgbs_static, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+            rgbs_static, _, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
         
         render_kwargs_test["c2w_staticcam"] = None
         imageio.mimwrite(moviebase + f"fixed_view_{args.fixed_pose_index}.mp4", to8b(rgbs_static), fps=30, quality=8)
@@ -890,7 +897,7 @@ def train():
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
         #####  Core optimization loop  #####
-        rgb, disp, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
+        rgb, disp, acc, depth, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True,
                                                 **render_kwargs_train)
 
@@ -936,11 +943,14 @@ def train():
             print("\nRENDERING")
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+                rgbs, disps, depths = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disparity.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'depth.mp4', to8b(depths / np.max(depths)), fps=30, quality=8)
+
 
         if i%args.i_testset==0 and i > 0:
             print("\nTESTING")
@@ -949,7 +959,8 @@ def train():
             print("Test poses shape:", poses[i_test].shape)
             i_test_sorted = np.sort(i_test)  # Sort the test poses in order
             with torch.no_grad():
-                test_rgbs, _ = render_path(torch.Tensor(poses[i_test_sorted]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test_sorted], savedir=testsavedir)
+                test_rgbs, _, _ = render_path(torch.Tensor(poses[i_test_sorted]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test_sorted], savedir=testsavedir)
+
             print("Saved test set")
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(test_rgbs), fps=30, quality=8)
             print("Created test set video")
@@ -991,7 +1002,7 @@ def train():
                 val_target_s = val_target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
             # Forward pass
-            val_rgb, _, _, val_extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
+            val_rgb, _, _, _, val_extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
                                             verbose=i < 10, retraw=True,
                                             **render_kwargs_train)
 
@@ -1001,7 +1012,7 @@ def train():
             # val_pose = poses[val_idx, :3,:4]
 
             # with torch.no_grad():
-            #     val_rgb, _, _, _ = render(H, W, focal, chunk=args.chunk, c2w=val_pose, **render_kwargs_test)
+            #     val_rgb, _, _, _, _ = render(H, W, focal, chunk=args.chunk, c2w=val_pose, **render_kwargs_test)
 
             val_loss = img2mse(val_rgb, val_target_s)
             val_psnr = mse2psnr(val_loss)
@@ -1031,7 +1042,7 @@ def train():
                 target = images[img_i]
                 pose = poses[img_i, :3,:4]
                 with torch.no_grad():
-                    rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
+                    rgb, disp, acc, depth, extras = render(H, W, focal, chunk=args.chunk, c2w=pose,
                                                         **render_kwargs_test)
 
                 psnr = mse2psnr(img2mse(rgb, target))
