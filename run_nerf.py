@@ -560,8 +560,8 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--use_static_cam", action='store_true',
-                        help='Fixes camera but changes viewing direction')
+    parser.add_argument("--fixed_pose_index", type=int, default=None,
+                        help='Fixes camera but uses render poses to change viewing direction. Value is index of fixed pose')
     parser.add_argument("--i_embed", type=int, default=0,
                         help='set 0 for default positional encoding, -1 for none')
     parser.add_argument("--multires", type=int, default=10,
@@ -768,7 +768,7 @@ def train():
                 # Default is smoother render_poses path
                 images = None
 
-            testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+            testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start+1))
             os.makedirs(testsavedir, exist_ok=True)
 
             rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
@@ -786,6 +786,20 @@ def train():
         initial_pose = np.copy(explore_pose)
 
         explore(explore_pose, hwf, K, args.chunk, render_kwargs_test, initial_pose)
+
+        return
+
+    if args.fixed_pose_index is not None:
+        """ Fix camera but use render poses to change viewing direction """
+
+        moviebase = os.path.join(basedir, expname, f"{expname}_{start+1:06d}_")
+        render_kwargs_test["c2w_staticcam"] = render_poses[args.fixed_pose_index][:3,:4]  # Fixed camera pose (index given by argument)
+        
+        with torch.no_grad():
+            rgbs_static, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+        
+        render_kwargs_test["c2w_staticcam"] = None
+        imageio.mimwrite(moviebase + f"fixed_view_{args.fixed_pose_index}.mp4", to8b(rgbs_static), fps=30, quality=8)
 
         return
 
@@ -926,14 +940,7 @@ def train():
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'depth.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
-
-            if args.use_static_cam:
-                render_kwargs_test['c2w_staticcam'] = render_poses[0][:3,:4]
-                with torch.no_grad():
-                    rgbs_static, _ = render_path(render_poses, hwf, args.chunk, render_kwargs_test)
-                render_kwargs_test['c2w_staticcam'] = None
-                imageio.mimwrite(moviebase + 'rgb_static.mp4', to8b(rgbs_static), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'disparity.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
 
         if i%args.i_testset==0 and i > 0:
             print("\nTESTING")
