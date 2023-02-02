@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from tqdm import tqdm, trange
 
 import matplotlib.pyplot as plt
+import seaborn
 
 from run_nerf_helpers import *
 
@@ -54,12 +55,12 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
     return outputs
 
 
-def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
+def batchify_rays(rays_flat, HEIGHT, WIDTH, chunk=1024*32, **kwargs):
     """Render rays in smaller minibatches to avoid OOM.
     """
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], **kwargs)
+        ret = render_rays(rays_flat[i:i+chunk], HEIGHT, WIDTH, **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
@@ -127,10 +128,14 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         rays = torch.cat([rays, viewdirs], -1)
 
     # Render and reshape
-    all_ret = batchify_rays(rays, chunk, **kwargs)
+    all_ret = batchify_rays(rays, H, W, chunk, **kwargs)
     for k in all_ret:
-        k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
-        all_ret[k] = torch.reshape(all_ret[k], k_sh)
+        try:
+            k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
+            all_ret[k] = torch.reshape(all_ret[k], k_sh)
+        except:
+            # Ignore returns that can't be reshaped
+            pass
 
     k_extract = ['rgb_map', 'disp_map', 'acc_map', "depth_map"]
     ret_list = [all_ret[k] for k in k_extract]
@@ -264,7 +269,7 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std=0, white_bkgd=False, pytest=False):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
@@ -277,6 +282,8 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
     """
+    SHOW_RAY = True
+
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
 
     dists = z_vals[...,1:] - z_vals[...,:-1]
@@ -296,6 +303,9 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = torch.Tensor(noise)
 
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+
+    
+
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
@@ -307,10 +317,28 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
-    return rgb_map, disp_map, acc_map, weights, depth_map
+    print("Num rays:", raw.shape[0])
+    print(WIDTH * HEIGHT)
+
+    if get_plot_data:
+        center_ray_index = WIDTH*(HEIGHT//2) + WIDTH//2  # Get index of ray going through the center pixel
+        
+        # Get ray distances and densities of the ray going through the center
+        ray_distances = z_vals[center_ray_index]
+        densities = alpha[center_ray_index]
+
+        if SHOW_RAY:
+            # Shows ray as red pixel
+            rgb_map[center_ray_index] = torch.Tensor([1, 0, 0])
+    else:
+        ray_distances, densities = None, None
+
+    return rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities
 
 
 def render_rays(ray_batch,
+                HEIGHT,
+                WIDTH,
                 network_fn,
                 network_query_fn,
                 N_samples,
@@ -387,10 +415,9 @@ def render_rays(ray_batch,
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
-
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
@@ -407,9 +434,10 @@ def render_rays(ray_batch,
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std, white_bkgd, pytest=pytest)
 
-    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map}
+    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map, "ray_distances": ray_distances, "densities": densities}
+
     if retraw:
         ret['raw'] = raw
     if N_importance > 0:
@@ -426,7 +454,19 @@ def render_rays(ray_batch,
     return ret
 
 
+def plot_ray_density(ray_distances, densities):
+    """ Plots a graph of the ray's distance with density at those points """
+    plt.plot(ray_distances, densities, c="indianred")
+    
+    plt.xlabel("Ray Distance")
+    plt.ylabel("Density")
+    plt.title("Plot of Ray Distance and Density")
+
+    plt.show()
+
+
 def update_pose(key, pose):
+    """ Updates pose matrix based on movement key """
     STEP_SIZE = 0.2
     ROTATION_ANGLE = 10
 
@@ -454,16 +494,15 @@ def update_pose(key, pose):
         rotation_operation = Rotation.from_euler('y', ROTATION_ANGLE, degrees=True).as_matrix()
         # Apply operation
         new_rotation_matrix = rotation_matrix @ rotation_operation
-        
+
         pose[:3, :3] = new_rotation_matrix
 
     elif key == "right":
-
         # Get rotation matrix for rotation around an axis by given angle
         rotation_operation = Rotation.from_euler('y', -ROTATION_ANGLE, degrees=True).as_matrix()
         # Apply operation
         new_rotation_matrix = rotation_matrix @ rotation_operation
-        
+
         pose[:3, :3] = new_rotation_matrix
 
     return pose
@@ -480,13 +519,13 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
     with torch.no_grad():
         explore_pose_tensor = torch.Tensor(explore_pose).to(device)
 
-        rgb, _, _, _, _ = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
+        rgb, _, _, _, all_returns = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
         render_out = rgb.cpu().detach().numpy()
         render_out = cv2.cvtColor(render_out, cv2.COLOR_RGB2BGR)
         render_out = cv2.resize(render_out, (W*SCALE_WINDOW, H*SCALE_WINDOW))
         cv2.imshow("Explore", render_out)
-    
+
     key = cv2.waitKey(0)
 
     # Up/W
@@ -509,6 +548,12 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
     # Reset view
     elif key == ord('r'):
         explore_pose = np.copy(initial_pose)
+
+    # Plot ray density graph
+    elif key == ord(' '):
+        ray_distances = all_returns["ray_distances"].cpu().detach().numpy()
+        densities = all_returns["densities"].cpu().detach().numpy()
+        plot_ray_density(ray_distances, densities)
 
     # If <ESC> (27) is pressed, stop program
     elif key == 27:
@@ -801,10 +846,10 @@ def train():
 
         moviebase = os.path.join(basedir, expname, f"{expname}_{start+1:06d}_")
         render_kwargs_test["c2w_staticcam"] = render_poses[args.fixed_pose_index][:3,:4]  # Fixed camera pose (index given by argument)
-        
+
         with torch.no_grad():
             rgbs_static, _, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
-        
+
         render_kwargs_test["c2w_staticcam"] = None
         imageio.mimwrite(moviebase + f"fixed_view_{args.fixed_pose_index}.mp4", to8b(rgbs_static), fps=30, quality=8)
 
