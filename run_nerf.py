@@ -56,15 +56,24 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
 
 
 def batchify_rays(rays_flat, HEIGHT, WIDTH, chunk=1024*32, **kwargs):
-    """Render rays in smaller minibatches to avoid OOM.
-    """
+    """ Render rays in smaller minibatches to avoid OutOfMemory """
     all_ret = {}
+    cumulative_num_rays = 0  # Stores cumulative counter of the number of rays in every batches
+    ray_shown = False  # Flag to determine if center ray has been rendered
+
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(rays_flat[i:i+chunk], HEIGHT, WIDTH, **kwargs)
+        ray_batch = rays_flat[i:i+chunk]  # Current rays in this batch
+        cumulative_num_rays += ray_batch.shape[0]  # Increment cumulative counter by the number of rays in the batch
+        
+        ret = render_rays(ray_batch, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, **kwargs)
+        ray_shown = ret["ray_shown"]  # Update ray_shown flag
+
         for k in ret:
-            if k not in all_ret:
-                all_ret[k] = []
-            all_ret[k].append(ret[k])
+            if ret[k] is not None and k != "ray_shown":
+                if k not in all_ret:
+                    all_ret[k] = []
+
+                all_ret[k].append(ret[k])
 
     all_ret = {k : torch.cat(all_ret[k], 0) for k in all_ret}
     return all_ret
@@ -269,7 +278,7 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std=0, white_bkgd=False, pytest=False):
+def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std=0, white_bkgd=False, pytest=False, get_plot_data=False):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
@@ -304,8 +313,6 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std=0, white_bkgd=
 
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
 
-    
-
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
@@ -317,28 +324,35 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std=0, white_bkgd=
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
 
-    print("Num rays:", raw.shape[0])
-    print(WIDTH * HEIGHT)
+    # Only get ray info if we want to plot and the ray hasn't been rendered already
+    if get_plot_data and not(ray_shown):
+        center_ray_index = WIDTH*(HEIGHT//2) + WIDTH//2  # Get index of ray in the flattened image
 
-    if get_plot_data:
-        center_ray_index = WIDTH*(HEIGHT//2) + WIDTH//2  # Get index of ray going through the center pixel
-        
-        # Get ray distances and densities of the ray going through the center
-        ray_distances = z_vals[center_ray_index]
-        densities = alpha[center_ray_index]
+        center_ray_batch_index = cumulative_num_rays - center_ray_index  # Get index of the ray in the current batch
 
-        if SHOW_RAY:
-            # Shows ray as red pixel
-            rgb_map[center_ray_index] = torch.Tensor([1, 0, 0])
+        # Check the index is positive, otherwise the ray is not in the current batch
+        if center_ray_batch_index > 0:
+            # Get ray distances and densities of the ray that goes through the center of the image
+            ray_distances = z_vals[-(center_ray_batch_index)]
+            densities = alpha[-(center_ray_batch_index)]
+
+            if SHOW_RAY:
+                # Shows ray as red pixel
+                rgb_map[-(center_ray_batch_index)] = torch.Tensor([1, 0, 0])
+                ray_shown = True
+        else:
+            ray_distances, densities = None, None
     else:
         ray_distances, densities = None, None
 
-    return rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities
+    return rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown
 
 
 def render_rays(ray_batch,
                 HEIGHT,
                 WIDTH,
+                cumulative_num_rays,
+                ray_shown,
                 network_fn,
                 network_query_fn,
                 N_samples,
@@ -382,6 +396,9 @@ def render_rays(ray_batch,
       depth0: See depth_map. Output for coarse model.
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
+      ray_distances: [num_ray_samples]
+      ray_densities: [num_ray_samples]
+      ray_shown: bool. If True, center ray has been rendered
     """
     N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
@@ -417,7 +434,7 @@ def render_rays(ray_batch,
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
@@ -434,9 +451,9 @@ def render_rays(ray_batch,
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, raw_noise_std, white_bkgd, pytest=pytest)
+        rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest, get_plot_data=True)
 
-    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map, "ray_distances": ray_distances, "densities": densities}
+    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map, "ray_distances": ray_distances, "densities": densities, "ray_shown": ray_shown}
 
     if retraw:
         ret['raw'] = raw
@@ -448,8 +465,9 @@ def render_rays(ray_batch,
         ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
-        if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
-            print(f"! [Numerical Error] {k} contains nan or inf.")
+        if ret[k] is not None and k != "ray_shown":
+            if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
+                print(f"! [Numerical Error] {k} contains nan or inf.")
 
     return ret
 
@@ -551,9 +569,10 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
     # Plot ray density graph
     elif key == ord(' '):
-        ray_distances = all_returns["ray_distances"].cpu().detach().numpy()
-        densities = all_returns["densities"].cpu().detach().numpy()
-        plot_ray_density(ray_distances, densities)
+        if "ray_distances" in all_returns and "densities" in all_returns:
+            ray_distances = all_returns["ray_distances"].cpu().detach().numpy()
+            densities = all_returns["densities"].cpu().detach().numpy()
+            plot_ray_density(ray_distances, densities)
 
     # If <ESC> (27) is pressed, stop program
     elif key == 27:
