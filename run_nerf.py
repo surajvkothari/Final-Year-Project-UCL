@@ -1,3 +1,11 @@
+"""
+This project is orginally by yenchenlin (https://github.com/yenchenlin/nerf-pytorch)
+and I, Suraj Kothari, have modified it to include features relevant to my final year
+project.#
+
+Copyright (C) 2023 yenchenlin, Suraj Kothari - All Rights Reserved
+"""
+
 import os, sys
 import cv2
 from scipy.spatial.transform import Rotation
@@ -19,7 +27,7 @@ from run_nerf_helpers import *
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
-from load_blender import load_npz_data
+from load_npz import load_npz_data
 from load_LINEMOD import load_LINEMOD_data
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -945,10 +953,6 @@ def train():
 
 
     N_iters = args.N_iters
-    print('Begin')
-    print('TRAIN views are', i_train)
-    print('VAL views are', i_val)
-    print('TEST views are', i_test)
 
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
