@@ -10,15 +10,15 @@ def load_npz_data(data_dir):
     NUM_IMAGES = images.shape[0]
     HEIGHT, WIDTH = images.shape[1:3]
 
-    num_train = int(NUM_IMAGES*0.8)
-    num_val = num_train + int(NUM_IMAGES*0.1)
-    num_test = num_val + int(NUM_IMAGES*0.1)
+    train_index = int(NUM_IMAGES*0.8)
+    val_index = train_index + int(NUM_IMAGES*0.1)
+    test_index = val_index + int(NUM_IMAGES*0.1)
 
-    indexs = np.arange(NUM_IMAGES)
-    np.random.shuffle(indexs)  # Random shuffle indexs in-place
+    indexes = np.arange(NUM_IMAGES)
+    np.random.shuffle(indexes)  # Random shuffle indexes in-place
 
-    # Select train, val, test from shuffled indexs
-    i_split = [indexs[:num_train], indexs[num_train:num_val], indexs[num_val:num_test]]
+    # Select train, val, test from shuffled indexes
+    i_split = [indexes[:train_index], indexes[train_index:val_index], indexes[val_index:test_index]]
 
     # Render poses are a sample of original poses
     NUM_RENDER_POSES = 50
