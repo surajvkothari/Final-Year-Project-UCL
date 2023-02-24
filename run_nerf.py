@@ -334,38 +334,37 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_sho
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
+    # Alpha is the opacity, which is density mapped to [0,1]
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
 
+    """
+    Calculate accumulated transmittance: the probability that the ray travels
+    from near bound to far bound without hitting any other particle
+    """
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+    accumulated_transmittance = torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+    weights = alpha * accumulated_transmittance
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
 
+    """
+    To calculate the depth (distance) of a ray, we multiply the
+    weights (alpha * accumulated_transmittance) by z_vals, which gives higher values
+    to the weights further along the ray.
+
+    This means that if the weights were distributed near the front of the ray, then
+    they would get a lower distance value than if the weights were distributed
+    towards the end of the ray.
+    """
     depth_map = torch.sum(weights * z_vals, -1)
 
-    # Normalise depth map values between 0 and 1
-    depth_min, depth_max = torch.min(depth_map), torch.max(depth_map)
-    depth_map = (depth_map - depth_min) / (depth_max - depth_min)
-
-    # Calculate depth map from density values (alpha)
-    num_samples = alpha.shape[1]
-    alpha = alpha * torch.linspace(1, 0, num_samples).expand(alpha.shape)  # Get equally spaced weights, of size [N_rays, N_samples], from 1 to 0
-
-    max_densities, argmax_densities = torch.max(alpha, dim=1)  # Get the maximum density for each ray and its corresponding index in the ray
-
-    # Get the proportions of each ray's max density relative to the largest maximum density across all rays
-    max_densities_proportions = max_densities / torch.max(max_densities)
-
-    alpha_map = depth_from_density(max_densities_proportions, argmax_densities, num_samples)
-
-    depth_map = alpha_map
-
-    #alpha_map = torch.sum(alpha, -1)
-    #alpha_weights = torch.linspace(1, 0, alpha.shape[1]).expand(alpha.shape)  # Get equally spaced weights, of size [N_rays, N_samples], from 1 to 0
-    #alpha_map = torch.sum(alpha_weights * alpha, -1)
-
+    # Disparity is inverse of depth (1/depth)
     disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
 
-    acc_map = torch.sum(weights, -1)
+    # Normalise disparity map
+    disp_min, disp_max = torch.min(disp_map), torch.max(disp_map)
+    disp_map = (disp_map - disp_min) / (disp_max - disp_min)
+
+    acc_map = torch.sum(weights, -1)  # Accumulated weights map
 
     if white_bkgd:
         rgb_map = rgb_map + (1.-acc_map[...,None])
@@ -529,6 +528,17 @@ def plot_ray_density(ray_distances, densities):
     plt.show()
 
 
+def plot_image_histogram(img):
+    hist = cv2.calcHist([img],[0],None,[256],[0,1])
+    plt.plot(hist, c="indianred")
+
+    plt.xlabel("Pixel value")
+    plt.ylabel("Frequency")
+    plt.title("Histogram of image")
+
+    plt.show()
+
+
 def update_pose(key, pose):
     """ Updates pose matrix based on movement key """
     STEP_SIZE = 0.2
@@ -586,9 +596,11 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
         rgb, disp, acc, depth, all_returns = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
         # Convert RGB and depth maps to Numpy arrays to be displayed in CV2 imshow
-        rgb_map, depth_map = rgb.cpu().detach().numpy(), depth.cpu().detach().numpy()
+        rgb_map, disp_map = rgb.cpu().detach().numpy(), disp.cpu().detach().numpy()
         rgb_map = cv2.cvtColor(rgb_map, cv2.COLOR_RGB2BGR)
-        rgb_map, depth_map = cv2.resize(rgb_map, (W*SCALE_WINDOW, H*SCALE_WINDOW)), cv2.resize(depth_map, (W*SCALE_WINDOW, H*SCALE_WINDOW))
+        # Scale output to be larger for displaying
+        rgb_map, disp_map = cv2.resize(rgb_map, (W*SCALE_WINDOW, H*SCALE_WINDOW)), cv2.resize(disp_map, (W*SCALE_WINDOW, H*SCALE_WINDOW))
+
         cv2.imshow("Explore", rgb_map)
 
     key = cv2.waitKey(0)
@@ -615,7 +627,8 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
     # Display depth map
     elif key == ord('m'):
-        cv2.imshow("Depth", depth_map)
+        cv2.imshow("Depth", disp_map)
+        plot_image_histogram(disp_map)
 
     # Plot ray density graph
     elif key == ord(' '):
