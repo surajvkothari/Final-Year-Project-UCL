@@ -502,8 +502,8 @@ def render_rays(ray_batch,
     return ret
 
 
-def plot_ray_density(ray_distances, opacities):
-    """ Plots a graph of the ray's distance with opacity at those points """
+def plot_ray_opacities(ray_distances, opacities):
+    """ Plots a graph of the ray's distance with the opacity at those points """
     plt.plot(ray_distances, opacities, c="indianred")
 
     plt.xlabel("Ray Distance")
@@ -620,7 +620,7 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
         if "ray_distances" in all_returns and "opacities" in all_returns:
             ray_distances = all_returns["ray_distances"].cpu().detach().numpy()
             opacities = all_returns["opacities"].cpu().detach().numpy()
-            plot_ray_density(ray_distances, opacities)
+            plot_ray_opacities(ray_distances, opacities)
 
     # If <ESC> (27) is pressed, stop program
     elif key == 27:
