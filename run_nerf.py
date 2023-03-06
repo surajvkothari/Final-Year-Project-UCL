@@ -286,21 +286,6 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-# def disparity_mapping(x, minimum, maximum):
-#     slope = 10 / (maximum - minimum)
-#     center = (minimum + maximum) / 2
-#
-#     logistic = .5/(1 + torch.exp(slope * (x - center))) + 0.25
-#
-#     return logistic
-
-
-def depth_from_density(max_densities_proportions, argmax_densities, num_samples):
-    output = max_densities_proportions - (argmax_densities / num_samples)
-
-    return F.relu(output)  # Apply ReLU to output to make negative values 0
-
-
 def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std=0, white_bkgd=False, pytest=False, get_plot_data=False):
     """Transforms model's predictions to semantically meaningful values.
     Args:
@@ -334,7 +319,7 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_sho
             noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
-    # Alpha is the opacity, which is density mapped to [0,1]
+    # Alpha is the opacities, which is densities mapped to [0,1]
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
 
     """
@@ -377,20 +362,20 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_sho
 
         # Check the index is positive, otherwise the ray is not in the current batch
         if center_ray_batch_index > 0:
-            # Get ray distances and densities of the ray that goes through the center of the image
+            # Get ray distances and opacities of the ray that goes through the center of the image
             ray_distances = z_vals[-(center_ray_batch_index)]
-            densities = alpha[-(center_ray_batch_index)]
+            opacities = alpha[-(center_ray_batch_index)]
 
             if SHOW_RAY:
                 # Shows ray as red pixel
                 rgb_map[-(center_ray_batch_index)] = torch.Tensor([1, 0, 0])
                 ray_shown = True
         else:
-            ray_distances, densities = None, None
+            ray_distances, opacities = None, None
     else:
-        ray_distances, densities = None, None
+        ray_distances, opacities = None, None
 
-    return rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown
+    return rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, opacities, ray_shown
 
 
 def render_rays(ray_batch,
@@ -479,7 +464,7 @@ def render_rays(ray_batch,
 
 #     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, opacities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
 
@@ -496,9 +481,9 @@ def render_rays(ray_batch,
 #         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, densities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest, get_plot_data=True)
+        rgb_map, disp_map, acc_map, weights, depth_map, ray_distances, opacities, ray_shown = raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_shown, raw_noise_std, white_bkgd, pytest=pytest, get_plot_data=True)
 
-    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map, "ray_distances": ray_distances, "densities": densities, "ray_shown": ray_shown}
+    ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map, "depth_map": depth_map, "ray_distances": ray_distances, "opacities": opacities, "ray_shown": ray_shown}
 
     if retraw:
         ret['raw'] = raw
@@ -517,13 +502,13 @@ def render_rays(ray_batch,
     return ret
 
 
-def plot_ray_density(ray_distances, densities):
-    """ Plots a graph of the ray's distance with density at those points """
-    plt.plot(ray_distances, densities, c="indianred")
+def plot_ray_density(ray_distances, opacities):
+    """ Plots a graph of the ray's distance with opacity at those points """
+    plt.plot(ray_distances, opacities, c="indianred")
 
     plt.xlabel("Ray Distance")
-    plt.ylabel("Density")
-    plt.title("Plot of Ray Distance and Density")
+    plt.ylabel("Opacity")
+    plt.title("Plot of Ray Distance and Opacity")
 
     plt.show()
 
@@ -632,10 +617,10 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
     # Plot ray density graph
     elif key == ord(' '):
-        if "ray_distances" in all_returns and "densities" in all_returns:
+        if "ray_distances" in all_returns and "opacities" in all_returns:
             ray_distances = all_returns["ray_distances"].cpu().detach().numpy()
-            densities = all_returns["densities"].cpu().detach().numpy()
-            plot_ray_density(ray_distances, densities)
+            opacities = all_returns["opacities"].cpu().detach().numpy()
+            plot_ray_density(ray_distances, opacities)
 
     # If <ESC> (27) is pressed, stop program
     elif key == 27:
