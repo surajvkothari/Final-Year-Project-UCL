@@ -368,7 +368,7 @@ def raw2outputs(raw, z_vals, rays_d, HEIGHT, WIDTH, cumulative_num_rays, ray_sho
 
             if SHOW_RAY:
                 # Shows ray as red pixel
-                rgb_map[-(center_ray_batch_index)] = torch.Tensor([1, 0, 0])
+                #rgb_map[-(center_ray_batch_index)] = torch.Tensor([1, 0, 0])
                 ray_shown = True
         else:
             ray_distances, opacities = None, None
@@ -509,8 +509,12 @@ def plot_ray_opacities(ray_distances, opacities):
     plt.xlabel("Ray Distance")
     plt.ylabel("Opacity")
     plt.title("Plot of Ray Distance and Opacity")
+    
+    # x = np.random.randint(1, high=10, size=1)
+    # plt.savefig(f"plot_{x}.pdf", format="pdf", bbox_inches="tight")
 
     plt.show()
+    
 
 
 def plot_image_histogram(img):
@@ -519,7 +523,9 @@ def plot_image_histogram(img):
 
     plt.xlabel("Pixel value")
     plt.ylabel("Frequency")
-    plt.title("Histogram of image")
+    plt.title("Histogram of disparity")
+
+    plt.savefig(f"histogram.pdf", format="pdf", bbox_inches="tight")
 
     plt.show()
 
