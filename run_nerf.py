@@ -509,12 +509,12 @@ def plot_ray_opacities(ray_distances, opacities):
     plt.xlabel("Ray Distance")
     plt.ylabel("Opacity")
     plt.title("Plot of Ray Distance and Opacity")
-    
+
     # x = np.random.randint(1, high=10, size=1)
     # plt.savefig(f"plot_{x}.pdf", format="pdf", bbox_inches="tight")
 
     plt.show()
-    
+
 
 
 def plot_image_histogram(img):
@@ -586,7 +586,7 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
 
         rgb, disp, acc, depth, all_returns = render(H, W, K, chunk=chunk, c2w=explore_pose_tensor[:3,:4], **render_kwargs)
 
-        # Convert RGB and depth maps to Numpy arrays to be displayed in CV2 imshow
+        # Convert RGB and disparity maps to Numpy arrays to be displayed in CV2 imshow
         rgb_map, disp_map = rgb.cpu().detach().numpy(), disp.cpu().detach().numpy()
         rgb_map = cv2.cvtColor(rgb_map, cv2.COLOR_RGB2BGR)
         # Scale output to be larger for displaying
@@ -616,9 +616,9 @@ def explore(explore_pose, hwf, K, chunk, render_kwargs, initial_pose):
     elif key == ord('r'):
         explore_pose = np.copy(initial_pose)
 
-    # Display depth map
+    # Display disparity map
     elif key == ord('m'):
-        cv2.imshow("Depth", disp_map)
+        cv2.imshow("Disparity", disp_map)
         plot_image_histogram(disp_map)
 
     # Plot ray density graph
