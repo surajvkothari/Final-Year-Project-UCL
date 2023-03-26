@@ -1,7 +1,7 @@
-expname = building_10_downsampled
+expname = building_10x_downsampled
 basedir = ./logs
-datadir = ./data/building_10_downsampled.npz
-ft_path = ./logs/building_10_downsampled/20000.tar
+datadir = ./data/building_10x_downsampled.npz
+ft_path = ./logs/building_10x_downsampled/20000.tar
 dataset_type = npz
 
 no_batching = True
@@ -18,5 +18,3 @@ N_rand = 1024
 
 precrop_iters = 500
 precrop_frac = 0.5
-
-

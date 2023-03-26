@@ -1,7 +1,7 @@
-expname = OIVIO_tunnel_5_downsampled
+expname = OIVIO_tunnel_10x_downsampled
 basedir = ./logs
-datadir = ./data/OIVIO_tunnel_5_downsampled.npz
-ft_path = ./logs/OIVIO_tunnel_10_downsampled/085000.tar
+datadir = ./data/OIVIO_tunnel_10x_downsampled.npz
+ft_path = ./logs/OIVIO_tunnel_10x_downsampled/085000.tar
 dataset_type = npz
 
 no_batching = True
