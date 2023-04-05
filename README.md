@@ -15,7 +15,7 @@ This user manual will provide a guide to using the extended features of this pro
 ### Getting the data
 Our data is stored in NumPy zips (.npz) and is not available in this repository. Instead, you will need to download the datasets from this [Google Drive link](https://drive.google.com/drive/folders/1lGJcPAoUxMEKT189W4GutoEF1wCMePGY?usp=share_link).
 
-After downloading, unzip the datasets folder and place it in the root of this repository so that the run_nerf.py script can access them.
+After downloading, unzip the datasets folder and place its content (the .npz files) inside the **data** folder.
 
 ### Using a configuration
 We have trained a NeRF model of the OIVIO dataset to 85,000 iterations. The same model has been applied to different resolutions of the data. When using any command, please replace <config_filename> with any of the following options:
