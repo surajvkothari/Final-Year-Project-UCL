@@ -12,6 +12,13 @@ It extends upon the PyTorch NeRF repository by [yenchenlin](https://github.com/y
 ## User Manual
 This user manual will provide a guide to using the extended features of this project.
 
+### Install Dependencies
+```
+pip install -r requirements.txt
+```
+
+You will also need access to a GPU and PyTorch enabled with CUDA.
+
 ### Getting the data
 Our data is stored in NumPy zips (.npz) and is not available in this repository. Instead, you will need to download the datasets from this [Google Drive link](https://drive.google.com/drive/folders/1lGJcPAoUxMEKT189W4GutoEF1wCMePGY?usp=share_link).
 
