@@ -22,7 +22,8 @@ You will also need access to a GPU and PyTorch enabled with CUDA.
 ### Getting the data
 Our data is stored in NumPy zips (.npz) and is not available in this repository. Instead, you will need to download the datasets from this [Google Drive link](https://drive.google.com/drive/folders/1lGJcPAoUxMEKT189W4GutoEF1wCMePGY?usp=share_link).
 
-After downloading, unzip the datasets folder and place its content (the .npz files) inside the **data** folder.
+After downloading, unzip the datasets folder and move the .npz files into the `data/` folder
+in the project.
 
 ### Using a configuration
 We have trained a NeRF model of the OIVIO dataset to 85,000 iterations. The same model has been applied to different resolutions of the data. When using any command, please replace <config_filename> with any of the following options:
@@ -46,6 +47,9 @@ After running the explore mode command, you will be shown an image of view from 
 
 * `W`, `S` - Moves forwards and backwards
 * `A`, `D` - Rotates the camera left and right
+* `R` - Resets the viewpoint to the start of the tunnel
+
+**Note:** When a key is pressed, there may be a delay until the next frame shows.
 
 </details>
 
