@@ -1,1 +1,0 @@
-This is the log folder which stores the outputs of the NeRF model
